@@ -244,6 +244,12 @@ const BaseButton = GObject.registerClass({
                 'window-left-monitor',
                 this._windowEnteredOrLeftMonitor.bind(this));
         }
+
+        this._delegate = this;
+        this._draggable = DND.makeDraggable(this);
+        this._draggable.connect('drag-begin', this._onDragBegin.bind(this));
+        this._draggable.connect('drag-cancelled', this._onDragCancelled.bind(this));
+        this._draggable.connect('drag-end', this._onDragEnd.bind(this));
     }
 
     get active() {
@@ -272,6 +278,23 @@ const BaseButton = GObject.registerClass({
 
         this._onClicked(this, 1);
     }
+
+    getDragActor() {
+        // Dummy drag actor
+        return new St.Bin({
+            width: 1, height: 1,
+        });
+    }
+
+    getDragActorSource() {
+        return this;
+    }
+
+    _onDragBegin() {}
+
+    _onDragCancelled() {}
+
+    _onDragEnd() {}
 
     _onClicked(_actor, _button) {
         throw new GObject.NotImplementedError(
@@ -373,6 +396,10 @@ class WindowButton extends BaseButton {
         this._notifyFocusId = global.display.connect(
             'notify::focus-window', this._updateStyle.bind(this));
         this._updateStyle();
+    }
+
+    getTarget() {
+        return this.metaWindow;
     }
 
     _onClicked(actor, button) {
@@ -543,6 +570,10 @@ class AppButton extends BaseButton {
         this._notifyFocusId = this._windowTracker.connect(
             'notify::focus-app', this._updateStyle.bind(this));
         this._updateStyle();
+    }
+
+    getTarget() {
+        return this.app;
     }
 
     _windowEnteredOrLeftMonitor(metaDisplay, monitorIndex, metaWindow) {
@@ -795,6 +826,8 @@ class WindowList extends St.Widget {
         this._dndTimeoutId = 0;
         this._dndWindow = null;
 
+        this._delegate = this;
+
         this._settings = ExtensionUtils.getSettings();
         this._groupingModeChangedId = this._settings.connect(
             'changed::grouping-mode', this._groupingModeChanged.bind(this));
@@ -982,6 +1015,31 @@ class WindowList extends St.Widget {
             child.destroy();
     }
 
+    handleDragOver(source, _actor, x, _y, _time) {
+        let buttons = this._windowList.get_children();
+        let position = 0;
+
+        for (let i = 0; i < buttons.length; i++) {
+            let button = buttons[i];
+            if (button.visible) {
+                if (x > button.x)
+                    position = i;
+                else
+                    break;
+            }
+        }
+
+        this._windowList.set_child_at_index(source, position);
+        this._updateWindowListPositions();
+        return DND.DragMotionResult.CONTINUE;
+    }
+
+    _updateWindowListPositions() {
+        let buttons = this._windowList.get_children();
+        for (let i = 0; i < buttons.length; i++)
+            buttons[i].getTarget().windowListPosition = i;
+    }
+
     _onWorkspacesChanged() {
         let workspaceManager = global.workspace_manager;
         let numWorkspaces = workspaceManager.n_workspaces;
@@ -1127,6 +1185,7 @@ class Extension {
         };
 
         this._buildWindowLists();
+        this._windowLists.forEach(windowList => this._restoreWindowList(windowList));
     }
 
     _buildWindowLists() {
@@ -1139,6 +1198,16 @@ class Extension {
             if (showOnAllMonitors || monitor === Main.layoutManager.primaryMonitor)
                 this._windowLists.push(new WindowList(showOnAllMonitors, monitor));
         });
+    }
+
+    _restoreWindowList(windowList) {
+        let buttons = windowList._windowList.get_children();
+        for (let i = 0; i < buttons.length; i++) {
+            let button = buttons[i];
+            let storedPos = button.getTarget().windowListPosition;
+            if (storedPos !== undefined)
+                windowList._windowList.set_child_at_index(button, storedPos);
+        }
     }
 
     disable() {
